@@ -1,5 +1,7 @@
 # ფილიალების პორტალი
 
+Live portal: https://toka-sina.github.io/branch-portal/
+
 Georgian branch issue portal, built as a dependency-free static application with a dedicated Supabase backend. This repository is independent of `branch-check`.
 
 ## Run locally
@@ -31,10 +33,13 @@ Categories can be added and deactivated by the administrator. New categories exp
 
 ## Deployment
 
-The `.openai/hosting.json` manifest identifies the separate Sites deployment and serves `dist/`. Runtime application data is held only in this project's Supabase database. GitHub is the independent source repository.
+Production hosting is GitHub Pages at `https://toka-sina.github.io/branch-portal/`, publishing from the root of the `gh-pages` branch. The repository is public with the owner's explicit approval. The `main` branch retains application and backend sources; `gh-pages` contains only the static files from `dist/` and `.nojekyll`. For future releases, synchronize the updated static files into `gh-pages` before checking the Pages deployment.
+
+The `.openai/hosting.json` manifest identifies the initial private Sites preview; it does not control the GitHub Pages deployment. Runtime application data is held only in this project's Supabase database.
 
 No real branch accounts or example business data are seeded. Start by signing in as the initial administrator, changing the initial password, creating branches, creating the branch/executor/supervisor accounts, and allocating branches to supervisors.
 
 ## Validation
 
 See `tests/VERIFICATION.md` for the performed integration checks. Temporary QA users and records are removed before delivery. The database identity sequence may contain gaps from rolled-back and QA inserts; issue numbers are identifiers, not row counts.
+
