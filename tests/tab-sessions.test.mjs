@@ -42,6 +42,8 @@ test('a fresh-user tab never imports a legacy login',()=>{
  const previous={access_token:'old-access',refresh_token:'old-refresh',user:{id:'admin'}};
  const local=storage({[key]:JSON.stringify(previous)});const a=tab({local,url:'https://portal.example/branch-portal/?new_session=1'});
  assert.equal(a.api.currentSession(),null);assert.ok(local.getItem(key));
+ const reloaded=tab({local,session:a.session,url:a.window.location.href});
+ assert.equal(reloaded.api.currentSession(),null,'refresh must not silently import an older shared login');
 });
 test('refreshing one token does not replace another tab session',async()=>{
  const local=storage();const a=tab({local});const b=tab({local});

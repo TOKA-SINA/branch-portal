@@ -1,5 +1,6 @@
 import {config} from './config.js';
 const storageKey='branch-portal-session';
+const initializedKey='branch-portal-tab-initialized';
 const pageUrl=new URL(window.location.href);
 const freshTab=pageUrl.searchParams.has('new_session');
 let session=null;
@@ -7,11 +8,12 @@ try{
  if(freshTab){sessionStorage.removeItem(storageKey)}
  else{
   session=JSON.parse(sessionStorage.getItem(storageKey)||'null');
-  if(!session){
+  if(!session&&sessionStorage.getItem(initializedKey)!=='1'){
    const previous=JSON.parse(localStorage.getItem(storageKey)||'null');
    if(previous?.access_token&&previous?.refresh_token&&previous?.user?.id){session=previous;sessionStorage.setItem(storageKey,JSON.stringify(session));localStorage.removeItem(storageKey)}
   }
  }
+ sessionStorage.setItem(initializedKey,'1');
 }catch{session=null}
 if(freshTab){pageUrl.searchParams.delete('new_session');window.history.replaceState(window.history.state,'',pageUrl.pathname+pageUrl.search+pageUrl.hash)}
 let refreshing;
