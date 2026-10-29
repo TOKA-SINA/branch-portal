@@ -8,6 +8,12 @@ Georgian branch issue portal, built as a dependency-free static application with
 
 Requires Node.js 22 or newer. Run `npm start` and open `http://127.0.0.1:4173`. Run `npm run check` for JavaScript syntax checks. The `dist/` directory is deployable without a build step.
 
+## Multiple users in one browser
+
+Each tab maintains its own authenticated session in sessionStorage. Use **სხვა მომხმარებელი** in the top toolbar to open a fresh sign-in tab, then sign in as another account. Refreshing a tab preserves its account. Signing out terminates only that tab's Supabase session. Tab titles display the account name and role. Existing localStorage-based sessions migrate once into the current tab; new sign-in tabs never import those legacy credentials.
+
+Run `npm test` for tab isolation, reload persistence, legacy migration, fresh-tab behavior and independent token refresh checks.
+
 ## Roles and workflow
 
 - **Admin:** all issues and analytics; account, branch and category management; original issue editing; recoverable deletion and restoration.
