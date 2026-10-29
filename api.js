@@ -1,10 +1,23 @@
 import {config} from './config.js';
 const storageKey='branch-portal-session';
-let session;try{session=JSON.parse(localStorage.getItem(storageKey)||'null')}catch{session=null}
+const pageUrl=new URL(window.location.href);
+const freshTab=pageUrl.searchParams.has('new_session');
+let session=null;
+try{
+ if(freshTab){sessionStorage.removeItem(storageKey)}
+ else{
+  session=JSON.parse(sessionStorage.getItem(storageKey)||'null');
+  if(!session){
+   const previous=JSON.parse(localStorage.getItem(storageKey)||'null');
+   if(previous?.access_token&&previous?.refresh_token&&previous?.user?.id){session=previous;sessionStorage.setItem(storageKey,JSON.stringify(session));localStorage.removeItem(storageKey)}
+  }
+ }
+}catch{session=null}
+if(freshTab){pageUrl.searchParams.delete('new_session');window.history.replaceState(window.history.state,'',pageUrl.pathname+pageUrl.search+pageUrl.hash)}
 let refreshing;
 export const currentSession=()=>session;
-export function clearSession(){session=null;localStorage.removeItem(storageKey)}
-function save(data){session={access_token:data.access_token,refresh_token:data.refresh_token,expires_at:Math.floor(Date.now()/1000)+data.expires_in,user:data.user};localStorage.setItem(storageKey,JSON.stringify(session));}
+export function clearSession(){session=null;sessionStorage.removeItem(storageKey)}
+function save(data){session={access_token:data.access_token,refresh_token:data.refresh_token,expires_at:Math.floor(Date.now()/1000)+data.expires_in,user:data.user};sessionStorage.setItem(storageKey,JSON.stringify(session));}
 async function raw(path,{method='GET',body,headers={},auth=true}={}){
  const r=await fetch(config.url+path,{method,headers:{apikey:config.key,'Content-Type':'application/json',...(auth&&session?{Authorization:'Bearer '+session.access_token}:{}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:{})});
  let data;const t=await r.text();try{data=t?JSON.parse(t):null}catch{data={message:t}}
@@ -20,7 +33,7 @@ export async function token(){
 export async function login(username,password){
  const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',auth:false,body:{email:username.trim().toLowerCase()+'@branch-portal.internal.invalid',password}});save(data);return data.user;
 }
-export async function logout(){try{await token();await raw('/auth/v1/logout',{method:'POST'})}finally{clearSession()}}
+export async function logout(){try{await token();await raw('/auth/v1/logout?scope=local',{method:'POST'})}finally{clearSession()}}
 export async function changePassword(password){await token();return raw('/auth/v1/user',{method:'PUT',body:{password}})}
 export async function query(table,filter=''){await token();return raw('/rest/v1/'+table+'?'+filter);}
 export async function all(table,filter=''){

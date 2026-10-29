@@ -12,3 +12,4 @@ dialog{padding:0;border:1px solid #e7dccc;border-radius:15px;background:var(--wh
 [hidden]{display:none!important}
 @media(max-height:850px){.sidebar-note{display:none}.brand{padding-bottom:20px}.nav-label{padding-top:11px}.nav-item{padding-top:10px;padding-bottom:10px}}
 @media(max-width:760px){.page-heading{flex-direction:column}.page-heading>.btn{align-self:flex-start}.sidebar{visibility:hidden}.sidebar.open{visibility:visible}}
+@media(max-width:760px){.new-session-link{padding:9px}.new-session-link span{display:none}}
