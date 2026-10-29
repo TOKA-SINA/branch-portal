@@ -36,7 +36,7 @@ Deno.serve(async(req:Request)=>{
   if(b.action==='create'||bootstrap){
    const username=String(b.username||'').trim().toLowerCase();
    if(!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username))throw new Error('მომხმარებლის სახელი: 3–40 ლათინური ასო, ციფრი, წერტილი, ტირე ან ქვედა ტირე');
-   if(typeof b.password!=='string'||b.password.length<12)throw new Error('პაროლი უნდა შეიცავდეს მინიმუმ 12 სიმბოლოს');
+   if(typeof b.password!=='string'||b.password.length<6)throw new Error('პაროლი უნდა შეიცავდეს მინიმუმ 6 სიმბოლოს');
    const {data,error}=await db.auth.admin.createUser({email:username+'@branch-portal.internal.invalid',password:b.password,email_confirm:true});
    if(error)throw new Error('ანგარიშის შექმნა ვერ მოხერხდა; გადაამოწმეთ მომხმარებლის სახელის უნიკალურობა');
    createdId=data.user.id;
@@ -52,7 +52,7 @@ Deno.serve(async(req:Request)=>{
    const {count}=await db.from('issues').select('id',{count:'exact',head:true}).eq('assigned_to',b.id).is('deleted_at',null).not('status','in','(completed,recorded)');
    if(count)throw new Error('ჯერ გადაანაწილეთ მომხმარებლის მიმდინარე დავალებები');
   }
-  if(b.password){if(b.password.length<12)throw new Error('პაროლი: მინიმუმ 12 სიმბოლო');const {error}=await db.auth.admin.updateUserById(b.id,{password:b.password});if(error)throw error;}
+  if(b.password){if(b.password.length<6)throw new Error('პაროლი: მინიმუმ 6 სიმბოლო');const {error}=await db.auth.admin.updateUserById(b.id,{password:b.password});if(error)throw error;}
   const {error}=await db.from('profiles').update({display_name:b.display_name.trim(),role,branch_id:branchId,active:b.active!==false}).eq('id',b.id);
   if(error)throw new Error(error.code==='23505'?'ფილიალს უკვე აქვს ანგარიში':error.message);
   const {error:de}=await db.from('supervisor_branches').delete().eq('supervisor_id',b.id);if(de)throw de;
@@ -63,3 +63,4 @@ Deno.serve(async(req:Request)=>{
   return reply({error:e instanceof Error?e.message:'ოპერაცია ვერ შესრულდა'},400);
  }
 });
+

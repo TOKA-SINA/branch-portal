@@ -42,4 +42,3 @@ No real branch accounts or example business data are seeded. Start by signing in
 ## Validation
 
 See `tests/VERIFICATION.md` for the performed integration checks. Temporary QA users and records are removed before delivery. The database identity sequence may contain gaps from rolled-back and QA inserts; issue numbers are identifiers, not row counts.
-
