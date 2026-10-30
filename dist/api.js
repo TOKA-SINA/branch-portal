@@ -18,7 +18,7 @@ try{
 if(freshTab){pageUrl.searchParams.delete('new_session');window.history.replaceState(window.history.state,'',pageUrl.pathname+pageUrl.search+pageUrl.hash)}
 let refreshing;
 export const currentSession=()=>session;
-export function clearSession(){session=null;sessionStorage.removeItem(storageKey)}
+export function clearSession(){session=null;sessionStorage.removeItem(storageKey);stopRealtime()}
 function save(data){session={access_token:data.access_token,refresh_token:data.refresh_token,expires_at:Math.floor(Date.now()/1000)+data.expires_in,user:data.user};sessionStorage.setItem(storageKey,JSON.stringify(session));}
 async function raw(path,{method='GET',body,headers={},auth=true}={}){
  const r=await fetch(config.url+path,{method,headers:{apikey:config.key,'Content-Type':'application/json',...(auth&&session?{Authorization:'Bearer '+session.access_token}:{}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:{})});
@@ -45,3 +45,29 @@ export async function insert(table,body){await token();return raw('/rest/v1/'+ta
 export async function update(table,id,body){await token();const data=await raw('/rest/v1/'+table+'?id=eq.'+encodeURIComponent(id),{method:'PATCH',body,headers:{Prefer:'return=representation'}});if(!data?.length)throw new Error('ჩანაწერი ვერ განახლდა; გადაამოწმეთ წვდომა');return data;}
 export async function adminUser(body){await token();const data=await raw('/functions/v1/admin-users',{method:'POST',body});if(data?.error)throw new Error(data.error);return data;}
 export async function readNotifications(){await token();return raw('/rest/v1/notifications?read_at=is.null',{method:'PATCH',body:{read_at:new Date().toISOString()}})}
+let realtimeSocket=null,realtimeHeartbeat=null,realtimeReconnect=null,realtimeStopped=true;
+export function stopRealtime(){realtimeStopped=true;if(realtimeReconnect){clearTimeout(realtimeReconnect);realtimeReconnect=null}if(realtimeHeartbeat){clearInterval(realtimeHeartbeat);realtimeHeartbeat=null}if(realtimeSocket){try{realtimeSocket.close()}catch{}realtimeSocket=null}}
+export async function startRealtime(userId,onChange){
+ stopRealtime();realtimeStopped=false;
+ const topic='realtime:branch-portal-'+userId;
+ const socketUrl=config.url.replace(/^https?/,'wss')+'/realtime/v1/websocket?apikey='+encodeURIComponent(config.key)+'&vsn=1.0.0';
+ const connect=async()=>{
+  if(realtimeStopped)return;
+  const access=await token();
+  const ws=new WebSocket(socketUrl);realtimeSocket=ws;let ref=0;
+  const send=(event,payload={})=>ws.send(JSON.stringify({topic,event,payload,ref:String(++ref)}));
+  ws.onopen=()=>{
+   send('phx_join',{config:{broadcast:{ack:false,self:false},presence:{key:''},postgres_changes:[
+    {event:'*',schema:'public',table:'issues'},
+    {event:'*',schema:'public',table:'comments'},
+    {event:'*',schema:'public',table:'issue_events'},
+    {event:'*',schema:'public',table:'notifications',filter:'user_id=eq.'+userId}
+   ]},access_token:access});
+   realtimeHeartbeat=setInterval(()=>{if(ws.readyState===WebSocket.OPEN)send('heartbeat',{})},25000);
+  };
+  ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.event==='postgres_changes')onChange?.(m.payload?.data||m.payload)}catch{}};
+  ws.onerror=()=>{try{ws.close()}catch{}};
+  ws.onclose=()=>{if(realtimeSocket===ws)realtimeSocket=null;if(realtimeHeartbeat){clearInterval(realtimeHeartbeat);realtimeHeartbeat=null}if(!realtimeStopped)realtimeReconnect=setTimeout(()=>connect().catch(()=>{}),5000)};
+ };
+ connect().catch(()=>{if(!realtimeStopped)realtimeReconnect=setTimeout(()=>connect().catch(()=>{}),5000)});
+}
