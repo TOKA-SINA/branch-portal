@@ -34,12 +34,15 @@ create table public.issues (
  id uuid primary key default gen_random_uuid(), number bigint generated always as identity unique,
  branch_id uuid not null references public.branches(id), category_id uuid not null references public.categories(id),
  description text not null check(length(trim(description)) between 3 and 10000),
- status text not null default 'new' check(status in ('new','pending_assignment','assigned','in_progress','awaiting_branch','awaiting_supervisor','completed','returned','recorded')),
+ status text not null default 'pending' check(status in ('pending','current','closed')),
  created_by uuid not null references public.profiles(id), assigned_to uuid references public.profiles(id),
  classified_by uuid references public.profiles(id), classified_at timestamptz,
  branch_approved_at timestamptz, completed_at timestamptz, submitted_at timestamptz,
+ severity text check(severity in ('minor','important','critical')),
+ external_contractor boolean not null default false,
  decision_note text not null default '' check(length(decision_note)<=5000),
- created_at timestamptz not null default now(), updated_at timestamptz not null default now(), deleted_at timestamptz
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now(), deleted_at timestamptz,
+ check(not external_contractor or assigned_to is null)
 );
 create index issues_branch_date_idx on public.issues(branch_id,created_at desc);
 create index issues_executor_status_idx on public.issues(assigned_to,status);
@@ -47,6 +50,8 @@ create index issues_category_idx on public.issues(category_id);
 create index issues_author_idx on public.issues(created_by);
 create index issues_classified_by_idx on public.issues(classified_by);
 create index issues_completed_idx on public.issues(completed_at) where completed_at is not null;
+create index issues_external_status_idx on public.issues(status,created_at) where external_contractor and deleted_at is null;
+create index issues_severity_idx on public.issues(severity,status) where deleted_at is null;
 create table public.comments (
  id uuid primary key default gen_random_uuid(), issue_id uuid not null references public.issues(id),
  author_id uuid not null references public.profiles(id), body text not null check(length(trim(body)) between 1 and 5000),
@@ -143,83 +148,114 @@ end $$;
 create trigger validate_supervisor_scope before insert or update on public.supervisor_branches for each row execute function private.validate_scope();
 
 create function private.guard_issue() returns trigger language plpgsql security definer set search_path='' as $$
-declare r text:=private.my_role(); uid uuid:=auth.uid(); k text;
+declare
+ r text:=private.my_role();uid uuid:=auth.uid();k text;manager boolean;
+ wanted_status text:=new.status;wanted_severity text:=new.severity;wanted_to uuid:=new.assigned_to;
+ wanted_external boolean:=new.external_contractor;wanted_submitted timestamptz:=new.submitted_at;
+ category_changed boolean:=false;branch_changed boolean:=false;target_changed boolean:=false;
 begin
- if uid is null or r is null then raise exception 'ავტორიზაცია აუცილებელია'; end if;
+ if uid is null or r is null then raise exception 'ავტორიზაცია აუცილებელია';end if;
  select kind into k from public.categories where id=new.category_id;
  if tg_op='INSERT' then
-  if r not in ('admin','branch') then raise exception 'საკითხის შექმნის უფლება არ გაქვთ'; end if;
-  if not exists(select 1 from public.branches where id=new.branch_id and active) then raise exception 'ფილიალი არააქტიურია'; end if;
-  if not exists(select 1 from public.categories where id=new.category_id and active) then raise exception 'კატეგორია არააქტიურია'; end if;
-  if r='branch' and new.branch_id is distinct from (select branch_id from public.profiles where id=uid) then raise exception 'სხვა ფილიალი მიუწვდომელია'; end if;
-  new.created_by:=uid; new.created_at:=now(); new.updated_at:=now(); new.status:='new'; new.assigned_to:=null;
-  new.classified_by:=null;new.classified_at:=null;new.branch_approved_at:=null;new.completed_at:=null;new.submitted_at:=null;new.deleted_at:=null;new.decision_note:='';
-  return new;
- end if;
- if new.id<>old.id or new.number<>old.number or new.created_by<>old.created_by or new.created_at<>old.created_at then raise exception 'სისტემური ველები უცვლელია'; end if;
- if r<>'admin' and (new.description is distinct from old.description or new.branch_id<>old.branch_id or new.deleted_at is distinct from old.deleted_at) then raise exception 'რედაქტირება მხოლოდ ადმინს შეუძლია'; end if;
- if old.deleted_at is not null and r<>'admin' then raise exception 'საკითხი წაშლილია'; end if;
- -- All approval timestamps are database controlled, including for administrators.
- new.classified_at:=old.classified_at;new.classified_by:=old.classified_by;
- new.branch_approved_at:=old.branch_approved_at;new.completed_at:=old.completed_at;new.submitted_at:=old.submitted_at;
- if r<>'admin' then
-  if new.category_id is distinct from old.category_id and (r<>'supervisor' or not private.can_manage_branch(old.branch_id)) then raise exception 'კატეგორიის შეცვლის უფლება არ გაქვთ';end if;
-  if new.assigned_to is distinct from old.assigned_to and (r<>'supervisor' or not private.can_manage_branch(old.branch_id)) then raise exception 'დანიშვნის უფლება არ გაქვთ';end if;
- end if;
- if new.category_id is distinct from old.category_id or new.branch_id is distinct from old.branch_id then
+  if r not in ('admin','branch') then raise exception 'საკითხის შექმნის უფლება არ გაქვთ';end if;
+  if not exists(select 1 from public.branches where id=new.branch_id and active) then raise exception 'ფილიალი არააქტიურია';end if;
   if not exists(select 1 from public.categories where id=new.category_id and active) then raise exception 'კატეგორია არააქტიურია';end if;
-  new.classified_at:=null;new.classified_by:=null;new.assigned_to:=null;new.branch_approved_at:=null;new.completed_at:=null;new.submitted_at:=null;new.status:='new';
+  if r='branch' and new.branch_id is distinct from (select branch_id from public.profiles where id=uid) then raise exception 'სხვა ფილიალი მიუწვდომელია';end if;
+  new.created_by:=uid;new.created_at:=now();new.updated_at:=now();new.status:='pending';
+  new.assigned_to:=null;new.external_contractor:=false;new.severity:=null;
+  new.classified_by:=null;new.classified_at:=null;new.branch_approved_at:=null;new.completed_at:=null;
+  new.submitted_at:=null;new.deleted_at:=null;new.decision_note:='';return new;
  end if;
- if new.status is distinct from old.status or new.category_id is distinct from old.category_id or (new.assigned_to is distinct from old.assigned_to and new.status='assigned') then
-  if new.status='new' and (r='admin' or (r='supervisor' and new.category_id is distinct from old.category_id)) then null;
-  elsif new.status in ('pending_assignment','recorded') and (r='admin' or private.can_manage_branch(old.branch_id)) and (old.status='new' or new.category_id is distinct from old.category_id) then
-   if (new.status='recorded') is distinct from (k='record') then raise exception 'სტატუსი კატეგორიას არ შეესაბამება';end if;
-   new.classified_at:=now();new.classified_by:=uid;new.assigned_to:=null;
-  elsif new.status='assigned' and old.status in ('pending_assignment','returned','assigned','in_progress') and (r='admin' or private.can_manage_branch(old.branch_id)) then
-   if k<>'task' or old.classified_at is null then raise exception 'ჯერ დაადასტურეთ კატეგორია';end if;
-   if new.assigned_to is null then raise exception 'აირჩიეთ შემსრულებელი';end if;
-   new.branch_approved_at:=null;new.completed_at:=null;new.submitted_at:=null;
-  elsif new.status='in_progress' and old.status='assigned' and (r='admin' or (r='executor' and old.assigned_to=uid)) then null;
-  elsif new.status='awaiting_branch' and old.status='in_progress' and (r='admin' or (r='executor' and old.assigned_to=uid)) then
-   new.submitted_at:=now();new.branch_approved_at:=null;new.completed_at:=null;
-  elsif new.status='awaiting_supervisor' and old.status='awaiting_branch' and (r='admin' or (r='branch' and exists(select 1 from public.profiles where id=uid and branch_id=old.branch_id))) then
-   new.branch_approved_at:=now();
-  elsif new.status='completed' and old.status='awaiting_supervisor' and old.branch_approved_at is not null and (r='admin' or private.can_manage_branch(old.branch_id)) then new.completed_at:=now();
-  elsif new.status='returned' and ((old.status='awaiting_branch' and (r='admin' or (r='branch' and exists(select 1 from public.profiles where id=uid and branch_id=old.branch_id)))) or
-    (old.status='awaiting_supervisor' and (r='admin' or private.can_manage_branch(old.branch_id)))) then
+ if new.id<>old.id or new.number<>old.number or new.created_by<>old.created_by or new.created_at<>old.created_at then raise exception 'სისტემური ველები უცვლელია';end if;
+ if r='branch' then raise exception 'ფილიალს დაფიქსირებული საკითხის შეცვლა არ შეუძლია';end if;
+ if r<>'admin' and (new.description is distinct from old.description or new.branch_id<>old.branch_id or new.deleted_at is distinct from old.deleted_at) then raise exception 'რედაქტირება მხოლოდ ადმინს შეუძლია';end if;
+ if old.deleted_at is not null and r<>'admin' then raise exception 'საკითხი წაშლილია';end if;
+ category_changed:=new.category_id is distinct from old.category_id;
+ branch_changed:=new.branch_id is distinct from old.branch_id;
+ target_changed:=wanted_to is distinct from old.assigned_to or wanted_external is distinct from old.external_contractor;
+ manager:=r='admin' or (r='supervisor' and private.can_manage_branch(old.branch_id));
+ new.classified_by:=old.classified_by;new.classified_at:=old.classified_at;new.completed_at:=old.completed_at;
+ new.submitted_at:=old.submitted_at;new.branch_approved_at:=old.branch_approved_at;
+ if r='executor' then
+  if old.assigned_to is distinct from uid or old.external_contractor or old.status<>'current' or old.deleted_at is not null then raise exception 'ამ საკითხზე შესრულების მონიშვნის უფლება არ გაქვთ';end if;
+  if category_changed or branch_changed or target_changed or wanted_severity is distinct from old.severity or wanted_status<>'current' then raise exception 'შემსრულებელს მხოლოდ შესრულების მონიშვნა შეუძლია';end if;
+  if old.submitted_at is not null or wanted_submitted is null then raise exception 'შესრულება უკვე მონიშნულია ან მოთხოვნა არასწორია';end if;
+  new.submitted_at:=now();new.updated_at:=now();return new;
+ end if;
+ if not manager then raise exception 'საკითხის მართვის უფლება არ გაქვთ';end if;
+ if r='admin' and not category_changed and not branch_changed and not target_changed and wanted_status=old.status and wanted_severity is not distinct from old.severity and wanted_submitted is not distinct from old.submitted_at then
+  new.updated_at:=now();return new;
+ end if;
+ if category_changed and not exists(select 1 from public.categories where id=new.category_id and active) then raise exception 'კატეგორია არააქტიურია';end if;
+ if branch_changed and not exists(select 1 from public.branches where id=new.branch_id and active) then raise exception 'ფილიალი არააქტიურია';end if;
+ if category_changed or branch_changed then
+  new.status:='pending';new.severity:=null;new.assigned_to:=null;new.external_contractor:=false;
+  new.classified_by:=null;new.classified_at:=null;new.completed_at:=null;new.submitted_at:=null;new.branch_approved_at:=null;
+ end if;
+ if wanted_status='pending' and (old.status='pending' or category_changed or branch_changed or r='admin') then
+  new.status:='pending';new.severity:=null;new.assigned_to:=null;new.external_contractor:=false;
+  new.classified_at:=null;new.classified_by:=null;new.submitted_at:=null;new.branch_approved_at:=null;new.completed_at:=null;new.decision_note:='';
+ elsif k='record' and wanted_status='closed' and (old.status in ('pending','current') or category_changed or branch_changed) then
+  new.status:='closed';new.severity:=null;new.assigned_to:=null;new.external_contractor:=false;
+  new.classified_by:=uid;new.classified_at:=now();new.completed_at:=now();new.submitted_at:=null;new.branch_approved_at:=null;new.decision_note:='';
+ elsif k='task' and wanted_status='current' and (old.status in ('pending','current') or category_changed or branch_changed) then
+  if wanted_severity is null or wanted_severity not in ('minor','important','critical') then raise exception 'გადაცემამდე აირჩიეთ საკითხის სიმძიმე';end if;
+  if wanted_external then new.assigned_to:=null;
+  else
+   if wanted_to is null or not exists(select 1 from public.profiles where id=wanted_to and role='executor' and active) then raise exception 'აირჩიეთ აქტიური შემსრულებელი ან გარე კონტრაქტორი';end if;
+   new.assigned_to:=wanted_to;
+  end if;
+  new.external_contractor:=wanted_external;new.severity:=wanted_severity;new.status:='current';new.completed_at:=null;new.branch_approved_at:=null;
+  if old.status='pending' or category_changed or branch_changed then
+   if not exists(select 1 from public.categories where id=new.category_id and active) then raise exception 'კატეგორია არააქტიურია';end if;
+   new.classified_by:=uid;new.classified_at:=now();new.submitted_at:=null;new.decision_note:='';
+  elsif target_changed then
+   if old.submitted_at is not null and length(trim(new.decision_note))<3 then raise exception 'ხელახალ გადაცემამდე მიუთითეთ დაბრუნების მიზეზი';end if;
+   new.submitted_at:=null;
+  elsif old.submitted_at is not null and wanted_submitted is null then
    if length(trim(new.decision_note))<3 then raise exception 'უარის მიზეზი სავალდებულოა';end if;
-   new.branch_approved_at:=null;new.completed_at:=null;
-  else raise exception 'სტატუსის ამგვარი შეცვლა დაუშვებელია';end if;
- elsif new.assigned_to is distinct from old.assigned_to then
-  raise exception 'შემსრულებლის ცვლილებისთვის გამოიყენეთ დანიშვნა';
- elsif new.decision_note is distinct from old.decision_note and r<>'admin' then raise exception 'შენიშვნა მხოლოდ მოქმედებასთან ერთად იწერება';
- end if;
- if new.assigned_to is not null and not exists(select 1 from public.profiles where id=new.assigned_to and role='executor' and active) then raise exception 'შემსრულებელი არააქტიურია';end if;
- if new.status in ('recorded','new','pending_assignment') then new.assigned_to:=null;end if;
+   new.submitted_at:=null;
+  elsif old.submitted_at is null and wanted_submitted is not null then
+   if r<>'admin' or old.external_contractor then raise exception 'შიდა დავალების შესრულებას შემსრულებელი მონიშნავს';end if;
+   new.submitted_at:=now();
+  else new.decision_note:='';end if;
+ elsif k='task' and wanted_status='closed' and old.status='current' and not category_changed and not branch_changed then
+  if target_changed or wanted_severity is distinct from old.severity then raise exception 'ჯერ შეინახეთ დანიშვნის ცვლილება';end if;
+  if not old.external_contractor and old.submitted_at is null then raise exception 'შემსრულებელმა ჯერ უნდა მონიშნოს შესრულება';end if;
+  new.status:='closed';new.completed_at:=now();new.branch_approved_at:=null;new.decision_note:='';
+ elsif wanted_status='closed' and old.status='closed' and not category_changed and not branch_changed then
+  if target_changed or wanted_severity is distinct from old.severity or wanted_submitted is distinct from old.submitted_at then raise exception 'დახურული საკითხის დანიშვნა უცვლელია';end if;
+ else raise exception 'სტატუსის ამგვარი შეცვლა დაუშვებელია';end if;
  new.updated_at:=now();return new;
 end $$;
+
 create trigger guard_issue before insert or update on public.issues for each row execute function private.guard_issue();
 
 create function private.issue_activity() returns trigger language plpgsql security definer set search_path='' as $$
-declare label text; act text; recipients uuid[];
+declare label text;act text;event_note text:='';
 begin
  if auth.uid() is null then raise exception 'ავტორიზაცია აუცილებელია';end if;
- if tg_op='INSERT' then label:='ახალი საკითხი';act:='created';
+ if tg_op='INSERT' then label:='ახალი საკითხი — ვაიზერის დასადასტურებელი';act:='created';
  elsif new.deleted_at is distinct from old.deleted_at then label:=case when new.deleted_at is null then 'საკითხი აღდგენილია' else 'საკითხი წაშლილია' end;act:='visibility';
  elsif new.category_id is distinct from old.category_id then label:='კატეგორია შეიცვალა';act:='category';
- elsif new.assigned_to is distinct from old.assigned_to then label:='დავალება დანიშნულია';act:='assignment';
- elsif new.status is distinct from old.status then label:=case new.status when 'awaiting_branch' then 'დაადასტურეთ შესრულება' when 'awaiting_supervisor' then 'ფილიალმა შესრულება დაადასტურა' when 'completed' then 'საკითხი შესრულებულია' when 'returned' then 'საკითხი დაბრუნებულია ვაიზერთან' when 'recorded' then 'კლასიფიკაცია დადასტურებულია' else 'საკითხის სტატუსი შეიცვალა' end;act:='status';
+ elsif new.submitted_at is not null and old.submitted_at is null then label:='შემსრულებელმა შესრულება მონიშნა';act:='submitted';event_note:=new.decision_note;
+ elsif old.submitted_at is not null and new.submitted_at is null and new.status='current' then label:='შესრულება დაბრუნებულია';act:='returned';event_note:=new.decision_note;
+ elsif new.assigned_to is distinct from old.assigned_to or new.external_contractor is distinct from old.external_contractor then
+  label:=case when new.external_contractor then 'გარე კონტრაქტორთან გადაცემულია' else 'დავალება გადაეცა შემსრულებელს' end;act:='assignment';event_note:=new.decision_note;
+ elsif new.status is distinct from old.status then
+  label:=case new.status when 'closed' then 'საკითხი დახურულია' when 'current' then 'საკითხი დადასტურებულია და მიმდინარეა' else 'საკითხი ვაიზერის დასადასტურებელია' end;act:='status';
+ elsif new.severity is distinct from old.severity then label:='საკითხის სიმძიმე შეიცვალა';act:='severity';
  elsif new.description is distinct from old.description or new.branch_id is distinct from old.branch_id then label:='საკითხი რედაქტირებულია';act:='edited';
  else return new;end if;
- insert into public.issue_events(issue_id,actor_id,action,detail) values(new.id,auth.uid(),act,jsonb_build_object('label',label,'status',new.status,'category_id',new.category_id,'assigned_to',new.assigned_to,'note',new.decision_note,'previous',case when tg_op='UPDATE' then jsonb_build_object('status',old.status,'category_id',old.category_id,'assigned_to',old.assigned_to,'description',old.description) else null end));
- -- Recipients always retain issue visibility; executors only receive their own assignment.
+ insert into public.issue_events(issue_id,actor_id,action,detail) values(new.id,auth.uid(),act,jsonb_build_object('label',label,'status',new.status,'severity',new.severity,'external_contractor',new.external_contractor,'category_id',new.category_id,'assigned_to',new.assigned_to,'note',event_note,'previous',case when tg_op='UPDATE' then jsonb_build_object('status',old.status,'severity',old.severity,'external_contractor',old.external_contractor,'category_id',old.category_id,'assigned_to',old.assigned_to,'description',old.description) else null end));
  insert into public.notifications(user_id,issue_id,title)
  select distinct p.id,new.id,label||' · #'||new.number from public.profiles p where p.active and p.id<>auth.uid() and
  (p.role='admin' or (p.role='branch' and p.branch_id=new.branch_id) or
  (p.role='supervisor' and exists(select 1 from public.supervisor_branches sb where sb.supervisor_id=p.id and sb.branch_id=new.branch_id)) or
- (p.role='executor' and p.id=new.assigned_to));
+ (p.role='executor' and not new.external_contractor and p.id=new.assigned_to));
  return new;
 end $$;
+
 create trigger issue_activity after insert or update on public.issues for each row execute function private.issue_activity();
 
 create function private.comment_activity() returns trigger language plpgsql security definer set search_path='' as $$

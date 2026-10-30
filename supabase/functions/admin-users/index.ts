@@ -49,7 +49,7 @@ Deno.serve(async(req:Request)=>{
   const {data:old}=await db.from('profiles').select('*').eq('id',b.id).single();
   if(!old)throw new Error('მომხმარებელი ვერ მოიძებნა');
   if(old.role==='executor'&&(role!=='executor'||b.active===false)){
-   const {count}=await db.from('issues').select('id',{count:'exact',head:true}).eq('assigned_to',b.id).is('deleted_at',null).not('status','in','(completed,recorded)');
+   const {count}=await db.from('issues').select('id',{count:'exact',head:true}).eq('assigned_to',b.id).is('deleted_at',null).neq('status','closed');
    if(count)throw new Error('ჯერ გადაანაწილეთ მომხმარებლის მიმდინარე დავალებები');
   }
   if(b.password){if(b.password.length<6)throw new Error('პაროლი: მინიმუმ 6 სიმბოლო');const {error}=await db.auth.admin.updateUserById(b.id,{password:b.password});if(error)throw error;}

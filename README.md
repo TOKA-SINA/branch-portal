@@ -2,49 +2,50 @@
 
 Live portal: https://toka-sina.github.io/branch-portal/
 
-Georgian branch issue portal, built as a dependency-free static application with a dedicated Supabase backend. This repository is independent of `branch-check`.
+Georgian issue portal with a dedicated Supabase backend. Independent of branch-check. Static frontend, no build dependencies.
 
-## Run locally
+## Run and validate
 
-Requires Node.js 22 or newer. Run `npm start` and open `http://127.0.0.1:4173`. Run `npm run check` for JavaScript syntax checks. The `dist/` directory is deployable without a build step.
+Node.js 22+: npm start (http://127.0.0.1:4173), npm run check, npm test.
+
+## Roles
+
+- Admin: all issues, analytics, users, branches, categories, original description editing, recoverable deletion/restoration.
+- Supervisor: allocated branches only; category correction, severity, assignment, contractor work and final closure.
+- Executor: assigned internal issues only; comments and completion submission; personal analytics.
+- Branch: its own issues; initial detailed description and read-only follow-up discussion. No analytics or completion approval.
+
+## Three statuses
+
+Only pending (ვაიზერის დასადასტურებელი), current (მიმდინარე), closed (დახურული).
+
+A branch submits an issue. The supervisor verifies its category and, for task categories, selects mandatory severity and a target in one review form. Internal work is assigned to an active executor; external work uses the anonymous გარე კონტრაქტორი flag, with no account or contractor name.
+
+Executors submit completion while the issue remains current. The supervisor approves by closing it or returns it with a required reason, optionally reassigning it. Branch confirmation is not required. Contractor issues have a separate supervisor/admin register and can be closed directly by their supervisor or an administrator.
+
+Ideas and customer requests remain in separate registers. Supervisor classification approval closes them directly, without severity or an executor.
+
+Unreviewed issues have a separate queue. Other rows sort critical → important → minor regardless of creation date; equal severities use oldest first. Existing historical assigned issues without severity keep their data and can have severity set in the review form.
 
 ## Multiple users in one browser
 
-Each tab maintains its own authenticated session in sessionStorage. Use **სხვა მომხმარებელი** in the top toolbar to open a fresh sign-in tab, then sign in as another account. Refreshing a tab preserves its account. Signing out terminates only that tab's Supabase session. Tab titles display the account name and role. Existing localStorage-based sessions migrate once into the current tab; new sign-in tabs never import those legacy credentials.
-
-Run `npm test` for tab isolation, reload persistence, legacy migration, fresh-tab behavior and independent token refresh checks.
-
-## Roles and workflow
-
-- **Admin:** all issues and analytics; account, branch and category management; original issue editing; recoverable deletion and restoration.
-- **Supervisor:** only allocated branches; category correction and confirmation; assignment and reassignment; final approval; scoped branch and executor analytics.
-- **Executor:** assigned issues, comments, work submission, personal monthly results.
-- **Branch:** one shared account per branch; its own issues, initial detailed comment, read-only follow-up discussion, approval or rejection with a mandatory reason.
-
-Technical issues: new → classification confirmed → assigned → in progress → awaiting branch → awaiting supervisor → completed. Rejection returns the issue to the supervisor for assignment; a fresh branch approval is required in the next cycle.
-
-Ideas and customer requests: new → supervisor validates/corrects category → recorded in their separate registers. They do not create executor tasks.
-
-Categories can be added and deactivated by the administrator. New categories explicitly choose task or record behavior. Deactivation preserves existing records. There are no attachments or email notifications. Public Auth signups are disabled; accounts can only be provisioned by the administrator.
+Each tab stores its own session. სხვა მომხმარებელი opens a fresh sign-in tab. Reload preserves the account; sign-out affects only that session. Tab titles identify the account and role. Existing shared logins migrate once. npm test includes tab isolation and refresh checks.
 
 ## Backend
 
-- Project: `fdftbvsgjclrnzvxholo`, Frankfurt, organization SINATRA.
-- `supabase/schema/portal.sql` is the consolidated fresh-project schema. Do not reapply it to the configured live project.
-- `supabase/functions/admin-users/index.ts` provisions Auth accounts, verifies the caller's current administrator profile, and manages supervisor scope. It uses a pinned `@supabase/supabase-js@2.118.0` dependency.
-- The browser configuration contains only a publishable key. Service credentials remain in Supabase's Edge Function environment.
-- Username sign-in maps the username internally to a synthetic `@branch-portal.internal.invalid` identifier. Users do not need email addresses and no emails are sent.
-- The one-time bootstrap has been consumed. There is no public way to create a portal profile. Every exposed table has RLS; original issue edits and all state transitions are checked inside database triggers.
-- Date display and monthly grouping use Asia/Tbilisi. Analytics date filters select issue creation dates; monthly completed totals use final approval dates.
+- Supabase project fdftbvsgjclrnzvxholo, organization SINATRA, Frankfurt.
+- supabase/schema/portal.sql is the current consolidated fresh-project schema. Do not reapply it to the configured project.
+- admin-users is an authenticated administrator-only Edge Function, using pinned @supabase/supabase-js@2.118.0. Service credentials stay server-side.
+- Username sign-in uses internal synthetic email identifiers; users do not need email. Minimum password length is six characters. Public Auth signup is disabled.
+- Every exposed table uses RLS. Database triggers validate all issue edits and transitions, required severity and assignment, executor submissions, and manager-only closure. The bootstrap is consumed.
+- Notifications are in-site only. There are no attachments.
+- Dates and monthly grouping use Asia/Tbilisi. Analytics date filters use creation dates; monthly closed task totals use closure dates. Branches have no analytics UI or route.
+- All changes are audited. Older audit status codes are displayed through the current three-status vocabulary without rewriting history.
 
-## Deployment
+## Hosting
 
-Production hosting is GitHub Pages at `https://toka-sina.github.io/branch-portal/`, publishing from the root of the `gh-pages` branch. The repository is public with the owner's explicit approval. The `main` branch retains application and backend sources; `gh-pages` contains only the static files from `dist/` and `.nojekyll`. For future releases, synchronize the updated static files into `gh-pages` before checking the Pages deployment.
+Production: GitHub Pages, root of gh-pages. Public repository with owner approval. main retains sources; synchronize dist files into gh-pages (including .nojekyll) for publication. .openai/hosting.json belongs to the initial private Sites preview and does not control Pages.
 
-The `.openai/hosting.json` manifest identifies the initial private Sites preview; it does not control the GitHub Pages deployment. Runtime application data is held only in this project's Supabase database.
+## Tests
 
-No real branch accounts or example business data are seeded. Start by signing in as the initial administrator, changing the initial password, creating branches, creating the branch/executor/supervisor accounts, and allocating branches to supervisors.
-
-## Validation
-
-See `tests/VERIFICATION.md` for the performed integration checks. Temporary QA users and records are removed before delivery. The database identity sequence may contain gaps from rolled-back and QA inserts; issue numbers are identifiers, not row counts.
+npm test verifies ordering, the three-status vocabulary, branch analytics visibility and independent tab sessions. tests/workflow-access.sql checks live RLS/transition behavior in a transaction that rolls back every fixture. tests/VERIFICATION.md records browser checks. Temporary browser-test accounts and issues are removed before delivery.
