@@ -1,4 +1,4 @@
-import * as api from './api.js?v=tabs';
+import * as api from './api.js?v=realtime1';
 import {statuses,severities,normalizedStatus,canSeeAnalytics,compareIssues,splitIssues} from './workflow.js?v=workflow3';
 const $=(q,root=document)=>root.querySelector(q);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
